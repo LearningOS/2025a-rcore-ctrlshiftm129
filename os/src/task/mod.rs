@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, VPNRange, VirtAddr};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -153,6 +154,91 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Get current task's syscall count
+    fn get_current_task_syscall_count(&self, syscall_id: usize) -> isize {
+        let inner = self.inner.exclusive_access();
+        let current_task = inner.current_task;
+        inner.tasks[current_task].syscall_count.get(syscall_id)
+    }
+
+    /// Increase current task's syscall count
+    fn increase_current_task_syscall_count(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current_task = inner.current_task;
+        inner.tasks[current_task].syscall_count.increase(syscall_id);
+    }
+
+    /// Current task's mmap
+    fn mmap(&self, start: usize, len: usize, prot: usize) -> isize {
+        if prot & !0x7 != 0 || prot & 0x7 == 0 {
+            return -1;
+        }
+        // 不存在只能写不能读
+        if (prot & 0x2) != 0 && (prot & 0x1) == 0 {
+            return -1;
+        }
+        let mut inner = self.inner.exclusive_access();
+        let current_task = inner.current_task;
+        let current_memset = &mut inner.tasks[current_task].memory_set;
+        // start 需要映射的虚存起始地址，要求按页对齐
+        let start_va = VirtAddr::from(start);
+        if !start_va.aligned() {
+            return -1;
+        }
+        let mut permission = MapPermission::U;
+        if prot & 0x1 != 0 {
+            permission |= MapPermission::R;
+        }
+        if prot & 0x2 != 0 {
+            permission |= MapPermission::W;
+        }
+        if prot & 0x4 != 0 {
+            permission |= MapPermission::X;
+        }
+        let end_va = VirtAddr::from(start + len);
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        let vpn_range = VPNRange::new(start_vpn, end_vpn);
+        // 确保[start, start + len) 中不存在已经被映射的页
+        for vpn in vpn_range {
+            if let Some(pte) = current_memset.translate(vpn) {
+                if pte.is_valid() {
+                    return -1;
+                }
+            }
+        }
+        current_memset.insert_framed_area(start_va, end_va, permission);
+        0
+    }
+
+    /// Current task's munmap
+    fn munmap(&self, start: usize, len: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current_task = inner.current_task;
+        let current_memset = &mut inner.tasks[current_task].memory_set;
+        // start 需要映射的虚存起始地址，要求按页对齐
+        let start_va = VirtAddr::from(start);
+        if !start_va.aligned() {
+            return -1;
+        }
+        let end_va = VirtAddr::from(start + len);
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        let vpn_range = VPNRange::new(start_vpn, end_vpn);
+        // 确保[start, start + len) 中不存在未被映射的页
+        for vpn in vpn_range {
+            if let Some(vpn) = current_memset.translate(vpn) {
+                if !vpn.is_valid() {
+                    return -1;
+                }
+            } else {
+                return -1;
+            }
+        }
+        current_memset.munmap_vpn_range(start_vpn, end_vpn);
+        0
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +287,24 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Increase current task's syscall counts
+pub fn increase_current_task_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.increase_current_task_syscall_count(syscall_id);
+}
+
+/// Get current task's syscall counts
+pub fn get_current_task_syscall_count(syscall_id: usize) -> isize {
+    TASK_MANAGER.get_current_task_syscall_count(syscall_id)
+}
+
+/// Current task's mmap
+pub fn mmap(start: usize, len: usize, prot: usize) -> isize {
+    TASK_MANAGER.mmap(start, len, prot)
+}
+
+/// Current task's munmap
+pub fn munmap(start: usize, len: usize) -> isize {
+    TASK_MANAGER.munmap(start, len)
 }

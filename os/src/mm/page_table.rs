@@ -70,6 +70,12 @@ impl PageTableEntry {
     pub fn executable(&self) -> bool {
         (self.flags() & PTEFlags::X) != PTEFlags::empty()
     }
+
+    /// Check if the page table entry is accessible in U privilege level
+    pub fn user_accessible(&self) -> bool {
+        (self.flags() & PTEFlags::U) != PTEFlags::empty()
+    }
+
 }
 
 /// page table structure
