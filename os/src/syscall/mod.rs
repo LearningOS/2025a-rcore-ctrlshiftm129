@@ -24,11 +24,51 @@ const SYSCALL_TRACE: usize = 410;
 mod fs;
 mod process;
 
+use crate::task::increase_current_task_syscall_count;
 use fs::*;
 use process::*;
 
+/// record syscall counts
+#[derive(Clone, Copy, Default)]
+pub struct SyscallCount {
+    write: isize,
+    exit: isize,
+    yield_: isize,
+    get_time: isize,
+    trace: isize,
+}
+
+impl SyscallCount {
+    /// increase syscall counts
+    pub fn increase(&mut self, syscall_id: usize) {
+        match syscall_id {
+            SYSCALL_WRITE => self.write += 1,
+            SYSCALL_EXIT => self.exit += 1,
+            SYSCALL_YIELD => self.yield_ += 1,
+            SYSCALL_GET_TIME => self.get_time += 1,
+            SYSCALL_TRACE => self.trace += 1,
+            _ => {}
+        }
+    }
+
+    /// get syscall counts
+    pub fn get(&self, syscall_id: usize) -> isize {
+        match syscall_id {
+            SYSCALL_WRITE => self.write,
+            SYSCALL_EXIT => self.exit,
+            SYSCALL_YIELD => self.yield_,
+            SYSCALL_GET_TIME => self.get_time,
+            SYSCALL_TRACE => self.trace,
+            _ => -1
+        }
+    }
+}
+
 /// handle syscall exception with `syscall_id` and other arguments
 pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
+    // 不用担心未定义的syscall_id,因为调用的是SyscallCount中的increase,如果未定义就直接忽略了
+    increase_current_task_syscall_count(syscall_id);
+
     match syscall_id {
         SYSCALL_WRITE => sys_write(args[0], args[1] as *const u8, args[2]),
         SYSCALL_EXIT => sys_exit(args[0] as i32),
