@@ -318,6 +318,17 @@ impl MemorySet {
             false
         }
     }
+
+    pub fn munmap_vpn_range(&mut self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) {
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            self.page_table.unmap(vpn);
+        }
+        self.areas.retain(|area| {
+            let area_start = area.get_start();
+            let area_end = area.get_end();
+            area_start < start_vpn || area_end > end_vpn
+        });
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
@@ -417,6 +428,20 @@ impl MapArea {
             }
             current_vpn.step();
         }
+    }
+    /// Get vpn range
+    pub fn get_range(&self) -> VPNRange {
+        self.vpn_range
+    }
+
+    /// Get vpn start
+    pub fn get_start(&self) -> VirtPageNum {
+        self.vpn_range.get_start()
+    }
+
+    /// Get vpn end
+    pub fn get_end(&self) -> VirtPageNum {
+        self.vpn_range.get_end()
     }
 }
 
