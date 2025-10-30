@@ -183,4 +183,106 @@ impl Inode {
         });
         block_cache_sync_all();
     }
+
+    /// root node使用
+    /// 硬链接,必须旧名字和新名字不同,且新名字不存在
+    /// 旧名字不存在时返回 -1
+    pub fn linkat(&self, old_name: &str, new_name: &str) -> i32 {
+        assert_ne!(old_name, new_name);
+        let mut fs = self.fs.lock();
+        let Some(inode_id) =
+            self.read_disk_inode(|disk_inode| self.find_inode_id(old_name, disk_inode))
+        else {
+            return -1;
+        };
+        let (inode_block_id, inode_block_offset) = fs.get_disk_inode_pos(inode_id);
+
+        // 从inode_id获取到inode再给inode的link_count++
+        get_block_cache(inode_block_id as usize, Arc::clone(&self.block_device))
+            .lock()
+            .modify(inode_block_offset, |inode: &mut DiskInode| {
+                inode.link_count += 1;
+            });
+        
+        // 分配新的DirEntry指向inode
+        self.modify_disk_inode(|root_inode| {
+            // append file in the dirent
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            // increase size
+            self.increase_size(new_size as u32, root_inode, &mut fs);
+            // write dirent
+            let dirent = DirEntry::new(new_name, inode_id);
+            root_inode.write_at(
+                file_count * DIRENT_SZ,
+                dirent.as_bytes(),
+                &self.block_device,
+            );
+        });
+        block_cache_sync_all();
+        0
+    }
+
+    /// 删除硬链接,链接数为0时回收
+    /// name 不存在时返回 -1
+    pub fn unlinkat(&self, name: &str) -> i32 {
+        // 不用find方法了,find方法内部会加锁,没法在外面加锁了
+        let mut fs = self.fs.lock();
+        let Some(inode_id) =
+            self.read_disk_inode(|disk_inode| self.find_inode_id(name, disk_inode))
+        else {
+            return -1;
+        };
+        let (inode_block_id, inode_block_offset) = fs.get_disk_inode_pos(inode_id);
+
+        self.modify_disk_inode(|root_inode| {
+            let result = root_inode.remove_dirent(name, &self.block_device);
+            // 之前确定过name存在了,返回值必定为0
+            assert_eq!(result, 0);
+        });
+
+        // 从inode_id获取到inode再给inode的link_count++
+        get_block_cache(inode_block_id as usize, Arc::clone(&self.block_device))
+            .lock()
+            .modify(inode_block_offset, |disk_inode: &mut DiskInode| {
+                disk_inode.link_count -= 1;
+                // 全部unlink以后删除disk_inode的数据,并把自身从索引位图中去除
+                if disk_inode.link_count == 0 {
+                    let data_blocks_dealloc = disk_inode.clear_size(&self.block_device);
+                    for data_block in data_blocks_dealloc.into_iter() {
+                        fs.dealloc_data(data_block);
+                    }
+                    fs.inode_bitmap.dealloc(&self.block_device, inode_id as usize);
+                }
+            });
+        block_cache_sync_all();
+        0
+    }
+
+    /// Get inode id
+    pub fn get_inode_id(&self) -> u32 {
+        let fs = self.fs.lock();
+        fs.get_inode_id_from_pos(self.block_id as u32, self.block_offset)
+    }
+
+    /// Is dir?
+    pub fn is_dir(&self) -> bool {
+        let _fs = self.fs.lock();
+        let is_dir = self.read_disk_inode(|disk_inode| disk_inode.is_dir());
+        is_dir
+    }
+
+    /// Is file?
+    pub fn is_file(&self) -> bool {
+        let _fs = self.fs.lock();
+        let is_file = self.read_disk_inode(|disk_inode| disk_inode.is_file());
+        is_file
+    }
+
+    /// Get link count
+    pub fn get_link_count(&self) -> u32 {
+        let _fs = self.fs.lock();
+        let count = self.read_disk_inode(|disk_inode| disk_inode.link_count);
+        count
+    }
 }

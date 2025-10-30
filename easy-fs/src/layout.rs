@@ -6,7 +6,7 @@ use core::fmt::{Debug, Formatter, Result};
 /// Magic number for sanity check
 const EFS_MAGIC: u32 = 0x3b800001;
 /// The max number of direct inodes
-const INODE_DIRECT_COUNT: usize = 28;
+const INODE_DIRECT_COUNT: usize = 27;
 /// The max length of inode name
 const NAME_LENGTH_LIMIT: usize = 27;
 /// The max number of indirect1 inodes
@@ -85,6 +85,7 @@ pub struct DiskInode {
     pub direct: [u32; INODE_DIRECT_COUNT],
     pub indirect1: u32,
     pub indirect2: u32,
+    pub link_count: u32,
     type_: DiskInodeType,
 }
 
@@ -386,6 +387,29 @@ impl DiskInode {
             start = end_current_block;
         }
         write_size
+    }
+
+    /// 从root_inode中删除DirEntry
+    pub fn remove_dirent(&mut self, name: &str, block_device: &Arc<dyn BlockDevice>) -> i32 {
+        // 原理:把最后一个DirEntry和要删除的DirEntry交换
+        assert!(self.is_dir());
+        let file_count = (self.size as usize) / DIRENT_SZ;
+        let mut dirent = DirEntry::empty();
+        for i in 0..file_count {
+            assert_eq!(
+                self.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &block_device),
+                DIRENT_SZ,
+            );
+            if dirent.name() == name {
+                // 把末尾的dirent放到这个dirent缓存中
+                self.read_at((file_count - 1) * DIRENT_SZ , dirent.as_bytes_mut(), &block_device);
+                self.write_at(i * DIRENT_SZ, dirent.as_bytes(), &block_device);
+                // 懒得回收空间了,就先这样吧
+                self.size -= 1;
+                return 0;
+            }
+        }
+        -1
     }
 }
 /// A directory entry

@@ -33,6 +33,9 @@ impl EasyFileSystem {
             ((inode_num * core::mem::size_of::<DiskInode>() + BLOCK_SZ - 1) / BLOCK_SZ) as u32;
         let inode_total_blocks = inode_bitmap_blocks + inode_area_blocks;
         let data_total_blocks = total_blocks - 1 - inode_total_blocks;
+        // x + y = n, n是总块数,x是数据块位图块数,y是数据块块数 --> y = n - x
+        // y <= x * 4096 --> n - x <= x * 4096
+        // n <= 4097 再取整
         let data_bitmap_blocks = (data_total_blocks + 4096) / 4097;
         let data_area_blocks = data_total_blocks - data_bitmap_blocks;
         let data_bitmap = Bitmap::new(
@@ -120,6 +123,14 @@ impl EasyFileSystem {
             block_id,
             (inode_id % inodes_per_block) as usize * inode_size,
         )
+    }
+    /// Get inode_id from position
+    pub fn get_inode_id_from_pos(&self, inode_block_id: u32, inode_block_offset: usize) -> u32 {
+        let inode_size = core::mem::size_of::<DiskInode>();
+        let inodes_per_block = (BLOCK_SZ / inode_size) as u32;
+        let block_offset_from_start = inode_block_id - self.inode_area_start_block;
+        let inode_index_in_block = (inode_block_offset / inode_size) as u32;
+        block_offset_from_start * inodes_per_block + inode_index_in_block
     }
     /// Get data block by id
     pub fn get_data_block_id(&self, data_block_id: u32) -> u32 {
