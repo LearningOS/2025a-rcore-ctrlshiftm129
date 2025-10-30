@@ -97,6 +97,7 @@ impl DiskInode {
         self.direct.iter_mut().for_each(|v| *v = 0);
         self.indirect1 = 0;
         self.indirect2 = 0;
+        self.link_count = 1;
         self.type_ = type_;
     }
     /// Whether this inode is a directory

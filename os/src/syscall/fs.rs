@@ -94,6 +94,7 @@ pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
         if let Some(stat) = file.get_fstat() {
             let user_stat = translated_refmut(token, st);
             *user_stat = stat;
+            return 0;
         } else {
             return -1;
         }
