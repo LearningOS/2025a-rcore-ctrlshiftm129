@@ -16,6 +16,8 @@ use alloc::{
 };
 use core::cell::RefMut;
 
+pub const BIG_STRIDE: usize = 65536;
+const INIT_PRIORITY: usize = 16;
 /// Task control block structure
 ///
 /// Directly save the contents that will not change during running
@@ -87,6 +89,12 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// 该进程当前已经运行的“长度”
+    pub stride: usize,
+
+    /// stride 需要进行的累加值
+    pub pass: usize
 }
 
 impl TaskControlBlockInner {
@@ -158,6 +166,8 @@ impl TaskControlBlock {
                     trap_ctx_backup: None,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    stride: 0,
+                    pass: BIG_STRIDE / INIT_PRIORITY
                 })
             },
         };
@@ -273,6 +283,8 @@ impl TaskControlBlock {
                     trap_ctx_backup: None,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    stride: 0,
+                    pass: BIG_STRIDE / INIT_PRIORITY
                 })
             },
         });

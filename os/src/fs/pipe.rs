@@ -173,4 +173,7 @@ impl File for Pipe {
             }
         }
     }
+    fn get_fstat(&self) -> Option<super::Stat> {
+        None
+    }
 }

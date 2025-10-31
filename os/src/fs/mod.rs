@@ -16,6 +16,8 @@ pub trait File: Send + Sync {
     fn read(&self, buf: UserBuffer) -> usize;
     /// write to the file from buf, return the number of bytes written
     fn write(&self, buf: UserBuffer) -> usize;
+    /// get file stat
+    fn get_fstat(&self) -> Option<Stat>;
 }
 
 /// The stat of a inode
@@ -47,6 +49,6 @@ bitflags! {
     }
 }
 
-pub use inode::{list_apps, open_file, OSInode, OpenFlags};
+pub use inode::{list_apps, open_file, OSInode, OpenFlags, linkat_file, unlinkat_file};
 pub use pipe::{make_pipe, Pipe};
 pub use stdio::{Stdin, Stdout};
