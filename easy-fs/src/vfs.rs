@@ -203,7 +203,7 @@ impl Inode {
             .modify(inode_block_offset, |inode: &mut DiskInode| {
                 inode.link_count += 1;
             });
-        
+
         // 分配新的DirEntry指向inode
         self.modify_disk_inode(|root_inode| {
             // append file in the dirent
@@ -252,7 +252,8 @@ impl Inode {
                     for data_block in data_blocks_dealloc.into_iter() {
                         fs.dealloc_data(data_block);
                     }
-                    fs.inode_bitmap.dealloc(&self.block_device, inode_id as usize);
+                    fs.inode_bitmap
+                        .dealloc(&self.block_device, inode_id as usize);
                 }
             });
         block_cache_sync_all();

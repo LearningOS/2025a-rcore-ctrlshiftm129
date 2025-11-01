@@ -5,10 +5,13 @@ use core::mem::size_of;
 
 use crate::{
     fs::{open_file, OpenFlags},
-    mm::{translated_byte_buffer,translated_ref, translated_refmut, translated_str, MapPermission,VPNRange, VirtAddr},
+    mm::{
+        translated_byte_buffer, translated_ref, translated_refmut, translated_str, MapPermission,
+        VPNRange, VirtAddr,
+    },
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next, pid2task,
-        suspend_current_and_run_next, SignalAction, SignalFlags, MAX_SIG,TaskControlBlock,
+        suspend_current_and_run_next, SignalAction, SignalFlags, TaskControlBlock, MAX_SIG,
     },
     timer::get_time_us,
 };
@@ -22,7 +25,7 @@ pub struct TimeVal {
 }
 
 pub fn sys_exit(exit_code: i32) -> ! {
-    trace!("kernel:pid[{}] sys_exit",current_task().unwrap().pid.0);
+    trace!("kernel:pid[{}] sys_exit", current_task().unwrap().pid.0);
     exit_current_and_run_next(exit_code);
     panic!("Unreachable in sys_exit!");
 }
@@ -34,12 +37,12 @@ pub fn sys_yield() -> isize {
 }
 
 pub fn sys_getpid() -> isize {
-	trace!("kernel: sys_getpid pid:{}", current_task().unwrap().pid.0);
+    trace!("kernel: sys_getpid pid:{}", current_task().unwrap().pid.0);
     current_task().unwrap().pid.0 as isize
 }
 
 pub fn sys_fork() -> isize {
-	trace!("kernel:pid[{}] sys_fork", current_task().unwrap().pid.0);
+    trace!("kernel:pid[{}] sys_fork", current_task().unwrap().pid.0);
     let current_task = current_task().unwrap();
     let new_task = current_task.fork();
     let new_pid = new_task.pid.0;
@@ -83,7 +86,7 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
 /// If there is not a child process whose pid is same as given, return -1.
 /// Else if there is a child process but it is still running, return -2.
 pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
-	//trace!("kernel: sys_waitpid");
+    //trace!("kernel: sys_waitpid");
     let task = current_task().unwrap();
     // find a child process
 
@@ -119,7 +122,7 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 }
 
 pub fn sys_kill(pid: usize, signum: i32) -> isize {
-	trace!("kernel:pid[{}] sys_kill", current_task().unwrap().pid.0);
+    trace!("kernel:pid[{}] sys_kill", current_task().unwrap().pid.0);
     if let Some(task) = pid2task(pid) {
         if let Some(flag) = SignalFlags::from_bits(1 << signum) {
             // insert the signal if legal
@@ -292,7 +295,10 @@ pub fn sys_set_priority(prio: isize) -> isize {
 }
 
 pub fn sys_sigprocmask(mask: u32) -> isize {
-    trace!("kernel:pid[{}] sys_sigprocmask", current_task().unwrap().pid.0);
+    trace!(
+        "kernel:pid[{}] sys_sigprocmask",
+        current_task().unwrap().pid.0
+    );
     if let Some(task) = current_task() {
         let mut inner = task.inner_exclusive_access();
         let old_mask = inner.signal_mask;
@@ -308,7 +314,10 @@ pub fn sys_sigprocmask(mask: u32) -> isize {
 }
 
 pub fn sys_sigreturn() -> isize {
-    trace!("kernel:pid[{}] sys_sigreturn", current_task().unwrap().pid.0);
+    trace!(
+        "kernel:pid[{}] sys_sigreturn",
+        current_task().unwrap().pid.0
+    );
     if let Some(task) = current_task() {
         let mut inner = task.inner_exclusive_access();
         inner.handling_sig = -1;
@@ -341,7 +350,10 @@ pub fn sys_sigaction(
     action: *const SignalAction,
     old_action: *mut SignalAction,
 ) -> isize {
-    trace!("kernel:pid[{}] sys_sigaction", current_task().unwrap().pid.0);
+    trace!(
+        "kernel:pid[{}] sys_sigaction",
+        current_task().unwrap().pid.0
+    );
     let token = current_user_token();
     let task = current_task().unwrap();
     let mut inner = task.inner_exclusive_access();

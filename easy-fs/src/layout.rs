@@ -401,7 +401,11 @@ impl DiskInode {
             );
             if dirent.name() == name {
                 // 把末尾的dirent放到这个dirent缓存中
-                self.read_at((file_count - 1) * DIRENT_SZ , dirent.as_bytes_mut(), &block_device);
+                self.read_at(
+                    (file_count - 1) * DIRENT_SZ,
+                    dirent.as_bytes_mut(),
+                    &block_device,
+                );
                 self.write_at(i * DIRENT_SZ, dirent.as_bytes(), &block_device);
                 // 懒得回收空间了,就先这样吧
                 self.size -= 1;

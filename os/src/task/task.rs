@@ -1,6 +1,8 @@
 //! Types related to task management & Functions for completely changing TCB
 
-use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle, SignalActions, SignalFlags, TaskContext};
+use super::{
+    kstack_alloc, pid_alloc, KernelStack, PidHandle, SignalActions, SignalFlags, TaskContext,
+};
 use crate::{
     config::TRAP_CONTEXT_BASE,
     fs::{File, Stdin, Stdout},
@@ -94,7 +96,7 @@ pub struct TaskControlBlockInner {
     pub stride: usize,
 
     /// stride 需要进行的累加值
-    pub pass: usize
+    pub pass: usize,
 }
 
 impl TaskControlBlockInner {
@@ -167,7 +169,7 @@ impl TaskControlBlock {
                     heap_bottom: user_sp,
                     program_brk: user_sp,
                     stride: 0,
-                    pass: BIG_STRIDE / INIT_PRIORITY
+                    pass: BIG_STRIDE / INIT_PRIORITY,
                 })
             },
         };
@@ -284,7 +286,7 @@ impl TaskControlBlock {
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
                     stride: 0,
-                    pass: BIG_STRIDE / INIT_PRIORITY
+                    pass: BIG_STRIDE / INIT_PRIORITY,
                 })
             },
         });
