@@ -7,15 +7,8 @@ os/target/*
 os/.idea/*
 os/src/link_app.S
 os/last-*
-os/Cargo.lock
 os/.gdb_history
-user/target/*
 user/.idea/*
-user/Cargo.lock
-easy-fs/Cargo.lock
-easy-fs/target/*
-easy-fs-fuse/Cargo.lock
-easy-fs-fuse/target/*
 tools/
 pushall.sh
 .vscode/*.log
@@ -23,3 +16,5 @@ pushall.sh
 ci-user/
 user/
 os/vendor/
+target/
+Cargo.lock
