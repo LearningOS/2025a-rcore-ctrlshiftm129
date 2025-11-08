@@ -15,7 +15,6 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
-use core::ops::{Add, Sub};
 
 /// Process Control Block
 pub struct ProcessControlBlock {
@@ -89,15 +88,6 @@ impl ResourceStatus {
         self.allocation.push(vec![0; m]);
         self.need.push(vec![0; m]);
     }
-}
-
-fn vector_add<T: Add<Output = T> + Copy>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
-    assert_eq!(vec1.len(), vec2.len());
-    vec1.iter().zip(&vec2).map(|(a, b)| *a + *b).collect()
-}
-fn vector_sub<T: Sub<Output = T> + Copy>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
-    assert_eq!(vec1.len(), vec2.len());
-    vec1.iter().zip(&vec2).map(|(a, b)| *a - *b).collect()
 }
 
 impl ProcessControlBlockInner {
@@ -364,7 +354,11 @@ impl ProcessControlBlock {
                 new_mutex_list_status.available[mutex_id] -= 1;
             }
             new_mutex_list_status.allocation[current_tid][mutex_id] += 1;
-            if is_safe_state(&new_mutex_list_status.available, &new_mutex_list_status.allocation, &new_mutex_list_status.need) {
+            if is_safe_state(
+                &new_mutex_list_status.available,
+                &new_mutex_list_status.allocation,
+                &new_mutex_list_status.need,
+            ) {
                 inner.mutex_list_status = new_mutex_list_status;
             } else {
                 return -0xDEAD;

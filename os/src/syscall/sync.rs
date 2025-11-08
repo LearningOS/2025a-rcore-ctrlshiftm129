@@ -118,9 +118,7 @@ pub fn sys_semaphore_create(res_count: usize) -> isize {
         process_inner
             .semaphore_list
             .push(Some(Arc::new(Semaphore::new(res_count))));
-        process_inner
-            .semaphore_list_status
-            .add_resource(res_count);
+        process_inner.semaphore_list_status.add_resource(res_count);
         process_inner.semaphore_list.len() - 1
     };
     id as isize

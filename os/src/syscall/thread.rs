@@ -3,7 +3,7 @@ use crate::{
     task::{add_task, current_task, TaskControlBlock},
     trap::{trap_handler, TrapContext},
 };
-use alloc::{sync::Arc, vec};
+use alloc::sync::Arc;
 /// thread create syscall
 pub fn sys_thread_create(entry: usize, arg: usize) -> isize {
     trace!(
