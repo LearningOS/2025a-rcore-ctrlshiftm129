@@ -15,6 +15,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
+use core::ops::{Add, Sub};
 
 /// Process Control Block
 pub struct ProcessControlBlock {
@@ -47,12 +48,56 @@ pub struct ProcessControlBlockInner {
     /// mutex list
     // todo 什么情况会是None?
     pub mutex_list: Vec<Option<Arc<dyn Mutex>>>,
+    pub mutex_list_status: ResourceStatus,
     /// semaphore list
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
+    pub semaphore_list_status: ResourceStatus,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
     /// 是否启用死锁检测
     pub deadlock_detect_enabled: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResourceStatus {
+    pub available: Vec<usize>,
+    pub need: Vec<Vec<usize>>,
+    pub allocation: Vec<Vec<usize>>,
+}
+
+impl ResourceStatus {
+    pub fn new() -> Self {
+        // 有主线程,要添加上去,不能直接Vec::new
+        Self {
+            available: Vec::new(),
+            need: vec![vec![]],
+            allocation: vec![vec![]],
+        }
+    }
+    pub fn add_resource(&mut self, res_count: usize) {
+        let n = self.allocation.len();
+        self.available.push(res_count);
+        for i in 0..n {
+            self.allocation[i].push(0);
+            self.need[i].push(0);
+        }
+        println!("self{:?}", self);
+    }
+
+    pub fn add_thread(&mut self) {
+        let m = self.available.len();
+        self.allocation.push(vec![0; m]);
+        self.need.push(vec![0; m]);
+    }
+}
+
+fn vector_add<T: Add<Output = T> + Copy>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
+    assert_eq!(vec1.len(), vec2.len());
+    vec1.iter().zip(&vec2).map(|(a, b)| *a + *b).collect()
+}
+fn vector_sub<T: Sub<Output = T> + Copy>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
+    assert_eq!(vec1.len(), vec2.len());
+    vec1.iter().zip(&vec2).map(|(a, b)| *a - *b).collect()
 }
 
 impl ProcessControlBlockInner {
@@ -121,7 +166,9 @@ impl ProcessControlBlock {
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),
                     mutex_list: Vec::new(),
+                    mutex_list_status: ResourceStatus::new(),
                     semaphore_list: Vec::new(),
+                    semaphore_list_status: ResourceStatus::new(),
                     condvar_list: Vec::new(),
                     deadlock_detect_enabled: false,
                 })
@@ -248,7 +295,9 @@ impl ProcessControlBlock {
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),
                     mutex_list: Vec::new(),
+                    mutex_list_status: ResourceStatus::new(),
                     semaphore_list: Vec::new(),
+                    semaphore_list_status: ResourceStatus::new(),
                     condvar_list: Vec::new(),
                     // todo 是否需要保持和父进程一致?
                     deadlock_detect_enabled: false,
@@ -290,95 +339,154 @@ impl ProcessControlBlock {
         self.pid.0
     }
 
-    pub fn try_lock_mutex(&self, mutex_id: usize) -> bool {
-        let inner = self.inner.exclusive_access();
+    pub fn try_mutex_lock(&self, mutex_id: usize) -> isize {
+        let current_tid = current_task()
+            .unwrap()
+            .inner_exclusive_access()
+            .res
+            .as_ref()
+            .unwrap()
+            .tid;
+        let mut inner = self.inner.exclusive_access();
         if mutex_id >= inner.mutex_list.len() || inner.mutex_list[mutex_id].is_none() {
-            return false;
+            return -1;
+        }
+        // println!("tid {} try lock mutex {}", current_tid, mutex_id);
+        // println!("avail{:?}", inner.mutex_list_status.available);
+        // println!("need{:?}", inner.mutex_list_status.need);
+        // println!("alloc{:?}", inner.mutex_list_status.allocation);
+        if inner.mutex_list_status.available[mutex_id] < 1 {
+            inner.mutex_list_status.need[current_tid][mutex_id] += 1;
         }
         if inner.deadlock_detect_enabled {
-            let m = inner.mutex_list.len();
-            let n = inner.tasks.len();
-            let mut available = vec![0; m];
-            let mut allocation = vec![vec![0; m]; n];
-            for (id, mutex) in inner.mutex_list.iter().enumerate() {
-                if let Some(ref mutex) = mutex {
-                    match mutex.get_owner() {
-                        // 虽然说最大就是1,还是+=1比较保险
-                        Some(owner) => allocation[owner][id] += 1,
-                        None => available[id] = 1,
-                    }
-                }
+            let mut new_mutex_list_status = inner.mutex_list_status.clone();
+            if new_mutex_list_status.available[mutex_id] >= 1 {
+                new_mutex_list_status.available[mutex_id] -= 1;
             }
-            let need = vec![vec![0; m]; n];
-            let current_tid = current_task()
-                .unwrap()
-                .inner_exclusive_access()
-                .res
-                .as_ref()
-                .unwrap()
-                .tid;
-            available[mutex_id] -= 1;
-            allocation[current_tid][mutex_id] += 1;
-            if !is_safe_state(&available, &allocation, &need) {
-                return false;
+            new_mutex_list_status.allocation[current_tid][mutex_id] += 1;
+            if is_safe_state(&new_mutex_list_status.available, &new_mutex_list_status.allocation, &new_mutex_list_status.need) {
+                inner.mutex_list_status = new_mutex_list_status;
+            } else {
+                return -0xDEAD;
             }
         }
         let mutex = Arc::clone(inner.mutex_list[mutex_id].as_ref().unwrap());
         drop(inner);
         mutex.lock();
-        true
+        0
     }
 
-    pub fn try_down_semaphore(&self, sem_id: usize) -> isize {
-        let inner = self.inner.exclusive_access();
+    // todo 没有持有锁就直接能解锁吗?
+    pub fn mutex_unlock(&self, mutex_id: usize) -> isize {
+        let current_tid = current_task()
+            .unwrap()
+            .inner_exclusive_access()
+            .res
+            .as_ref()
+            .unwrap()
+            .tid;
+        let mut inner = self.inner_exclusive_access();
+        if mutex_id >= inner.mutex_list.len() || inner.mutex_list[mutex_id].is_none() {
+            return -1;
+        }
+        // println!("tid {} try unlock mutex {}", current_tid, mutex_id);
+        // println!("avail{:?}", inner.mutex_list_status.available);
+        // println!("need{:?}", inner.mutex_list_status.need);
+        // println!("alloc{:?}", inner.mutex_list_status.allocation);
+        let mutex = Arc::clone(inner.mutex_list[mutex_id].as_ref().unwrap());
+        if inner.mutex_list_status.allocation[current_tid][mutex_id] >= 1 {
+            inner.mutex_list_status.allocation[current_tid][mutex_id] -= 1;
+        }
+        let new_tid = mutex.get_wait_queue_front_tid();
+        if let Some(new_tid) = new_tid {
+            inner.mutex_list_status.need[new_tid][mutex_id] -= 1;
+            inner.mutex_list_status.allocation[new_tid][mutex_id] += 1;
+        } else {
+            inner.mutex_list_status.available[mutex_id] = 1;
+        }
+        drop(inner);
+        mutex.unlock();
+        0
+    }
+
+    pub fn try_semaphore_down(&self, sem_id: usize) -> isize {
+        let current_tid = current_task()
+            .unwrap()
+            .inner_exclusive_access()
+            .res
+            .as_ref()
+            .unwrap()
+            .tid;
+        let mut inner = self.inner.exclusive_access();
         if sem_id >= inner.semaphore_list.len() || inner.semaphore_list[sem_id].is_none() {
             return -1;
         }
+        // println!("tid {} try down sem {}", current_tid, sem_id);
+        // println!("avail{:?}", inner.semaphore_list_status.available);
+        // println!("need{:?}", inner.semaphore_list_status.need);
+        // println!("alloc{:?}", inner.semaphore_list_status.allocation);
+        if inner.semaphore_list_status.available[sem_id] < 1 {
+            inner.semaphore_list_status.need[current_tid][sem_id] += 1;
+            //直接进入等待队列
+        }
         if inner.deadlock_detect_enabled {
-            let m = inner.semaphore_list.len();
-            let n = inner.tasks.len();
-            let mut available = vec![0; m];
-            let mut allocation = vec![vec![0; m]; n];
-            let mut need = vec![vec![0; m]; n];
-            for (id, sem) in inner.semaphore_list.iter().enumerate() {
-                if let Some(ref sem) = sem {
-                    for owner in sem.get_owners() {
-                        // todo 会有>1的情况吗?
-                        allocation[owner][id] += 1;
-                    }
-                    if sem.get_count() >= 0 {
-                        available[id] += sem.get_count() as usize;
-                    } else {
-                        let wait_tid_list = sem.get_wait_tid_list();
-                        for tid in wait_tid_list {
-                            need[tid][id] += 1;
-                        }
-                    }
-                }
+            let mut new_semaphore_list_status = inner.semaphore_list_status.clone();
+            if new_semaphore_list_status.available[sem_id] >= 1 {
+                new_semaphore_list_status.available[sem_id] -= 1;
             }
-            let current_tid = current_task()
-                .unwrap()
-                .inner_exclusive_access()
-                .res
-                .as_ref()
-                .unwrap()
-                .tid;
-            if available[sem_id] < 1 {
-                return -1;
-            }
-            available[sem_id] -= 1;
-            
-            allocation[current_tid][sem_id] += 1;
-            println!("avail {:?}", available);
-            println!("alloc {:?}", allocation);
-            println!("need {:?}", need);
-            if !is_safe_state(&available, &allocation, &need) {
+            // need +1 再 -1应该没变
+            new_semaphore_list_status.allocation[current_tid][sem_id] += 1;
+            // println!("avail {:?}", available);
+            // println!("alloc {:?}", allocation);
+            // println!("need {:?}", need);
+            if is_safe_state(
+                &new_semaphore_list_status.available,
+                &new_semaphore_list_status.allocation,
+                &new_semaphore_list_status.need,
+            ) {
+                inner.semaphore_list_status = new_semaphore_list_status;
+            } else {
                 return -0xDEAD;
             }
         }
         let sem = Arc::clone(inner.semaphore_list[sem_id].as_ref().unwrap());
         drop(inner);
         sem.down();
+        0
+    }
+
+    pub fn semaphore_up(&self, sem_id: usize) -> isize {
+        let current_tid = current_task()
+            .unwrap()
+            .inner_exclusive_access()
+            .res
+            .as_ref()
+            .unwrap()
+            .tid;
+        let mut inner = self.inner_exclusive_access();
+        if sem_id >= inner.semaphore_list.len() || inner.semaphore_list[sem_id].is_none() {
+            return -1;
+        }
+        // println!("tid {} try up sem {}", current_tid, sem_id);
+        // println!("avail{:?}", inner.semaphore_list_status.available);
+        // println!("need{:?}", inner.semaphore_list_status.need);
+        // println!("alloc{:?}", inner.semaphore_list_status.allocation);
+        let sem = Arc::clone(inner.semaphore_list[sem_id].as_ref().unwrap());
+        // ??
+        if inner.semaphore_list_status.allocation[current_tid][sem_id] >= 1 {
+            inner.semaphore_list_status.allocation[current_tid][sem_id] -= 1;
+        }
+        if sem.get_count() > 0 {
+            inner.semaphore_list_status.available[sem_id] += 1;
+        } else {
+            let new_tid = sem.get_wait_queue_front_tid();
+            if let Some(new_tid) = new_tid {
+                inner.semaphore_list_status.need[new_tid][sem_id] -= 1;
+                inner.semaphore_list_status.allocation[new_tid][sem_id] += 1;
+            }
+        }
+        drop(inner);
+        sem.up();
         0
     }
 }
@@ -397,7 +505,9 @@ fn is_safe_state(available: &[usize], allocation: &[Vec<usize>], need: &[Vec<usi
     for _ in 0..n {
         let found_thread = (0..n).find(|&i| !finish[i] && can_allocate(&need[i], &work));
         if let Some(i) = found_thread {
-            work.iter_mut().zip(&allocation[i]).for_each(|(w, &alloc)| *w += alloc);
+            work.iter_mut()
+                .zip(&allocation[i])
+                .for_each(|(w, &alloc)| *w += alloc);
             finish[i] = true;
         } else {
             return false;

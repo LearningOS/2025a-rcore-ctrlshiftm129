@@ -13,6 +13,8 @@ pub trait Mutex: Sync + Send {
     /// Unlock the mutex
     fn unlock(&self);
     fn get_owner(&self) -> Option<usize>;
+    fn locked(&self) -> bool;
+    fn get_wait_queue_front_tid(&self) -> Option<usize>;
 }
 
 /// Spinlock Mutex struct
@@ -65,6 +67,14 @@ impl Mutex for MutexSpin {
 
     fn get_owner(&self) -> Option<usize> {
         *self.owner.exclusive_access()
+    }
+
+    fn locked(&self) -> bool {
+        *self.locked.exclusive_access()
+    }
+
+    fn get_wait_queue_front_tid(&self) -> Option<usize> {
+        None
     }
 }
 
@@ -135,5 +145,24 @@ impl Mutex for MutexBlocking {
     fn get_owner(&self) -> Option<usize> {
         let mutex_inner = self.inner.exclusive_access();
         mutex_inner.owner
+    }
+
+    fn locked(&self) -> bool {
+        let inner = self.inner.exclusive_access();
+        inner.locked
+    }
+
+    fn get_wait_queue_front_tid(&self) -> Option<usize> {
+        let inner = self.inner.exclusive_access();
+        if let Some(task) = inner.wait_queue.front() {
+            // todo 有必要clone吗?
+            let task = Arc::clone(task);
+            let task_inner = task.inner_exclusive_access();
+            let task_res = task_inner.res.as_ref().unwrap();
+            let task_tid = task_res.tid;
+            Some(task_tid)
+        } else {
+            None
+        }
     }
 }
