@@ -133,6 +133,7 @@ pub fn exit_current_and_run_next(exit_code: i32) {
         let mut recycle_res = Vec::<TaskUserRes>::new();
         for task in process_inner.tasks.iter().filter(|t| t.is_some()) {
             let task = task.as_ref().unwrap();
+            // todo 不理解
             // if other tasks are Ready in TaskManager or waiting for a timer to be
             // expired, we should remove them.
             //

@@ -12,11 +12,13 @@ pub trait Mutex: Sync + Send {
     fn lock(&self);
     /// Unlock the mutex
     fn unlock(&self);
+    fn get_owner(&self) -> Option<usize>;
 }
 
 /// Spinlock Mutex struct
 pub struct MutexSpin {
     locked: UPSafeCell<bool>,
+    owner: UPSafeCell<Option<usize>>,
 }
 
 impl MutexSpin {
@@ -24,6 +26,7 @@ impl MutexSpin {
     pub fn new() -> Self {
         Self {
             locked: unsafe { UPSafeCell::new(false) },
+            owner: unsafe { UPSafeCell::new(None) },
         }
     }
 }
@@ -39,7 +42,15 @@ impl Mutex for MutexSpin {
                 suspend_current_and_run_next();
                 continue;
             } else {
+                let tid = current_task()
+                    .unwrap()
+                    .inner_exclusive_access()
+                    .res
+                    .as_ref()
+                    .unwrap()
+                    .tid;
                 *locked = true;
+                *self.owner.exclusive_access() = Some(tid);
                 return;
             }
         }
@@ -49,6 +60,11 @@ impl Mutex for MutexSpin {
         trace!("kernel: MutexSpin::unlock");
         let mut locked = self.locked.exclusive_access();
         *locked = false;
+        *self.owner.exclusive_access() = None;
+    }
+
+    fn get_owner(&self) -> Option<usize> {
+        *self.owner.exclusive_access()
     }
 }
 
@@ -59,6 +75,7 @@ pub struct MutexBlocking {
 
 pub struct MutexBlockingInner {
     locked: bool,
+    owner: Option<usize>,
     wait_queue: VecDeque<Arc<TaskControlBlock>>,
 }
 
@@ -70,6 +87,7 @@ impl MutexBlocking {
             inner: unsafe {
                 UPSafeCell::new(MutexBlockingInner {
                     locked: false,
+                    owner: None,
                     wait_queue: VecDeque::new(),
                 })
             },
@@ -87,7 +105,15 @@ impl Mutex for MutexBlocking {
             drop(mutex_inner);
             block_current_and_run_next();
         } else {
+            let tid = current_task()
+                    .unwrap()
+                    .inner_exclusive_access()
+                    .res
+                    .as_ref()
+                    .unwrap()
+                    .tid;
             mutex_inner.locked = true;
+            mutex_inner.owner = Some(tid);
         }
     }
 
@@ -97,9 +123,17 @@ impl Mutex for MutexBlocking {
         let mut mutex_inner = self.inner.exclusive_access();
         assert!(mutex_inner.locked);
         if let Some(waking_task) = mutex_inner.wait_queue.pop_front() {
+            let waking_task_tid = waking_task.inner_exclusive_access().res.as_ref().unwrap().tid;
             wakeup_task(waking_task);
+            mutex_inner.owner = Some(waking_task_tid);
         } else {
             mutex_inner.locked = false;
+            mutex_inner.owner = None;
         }
+    }
+
+    fn get_owner(&self) -> Option<usize> {
+        let mutex_inner = self.inner.exclusive_access();
+        mutex_inner.owner
     }
 }

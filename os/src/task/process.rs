@@ -8,6 +8,7 @@ use super::{pid_alloc, PidHandle};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{translated_refmut, MemorySet, KERNEL_SPACE};
 use crate::sync::{Condvar, Mutex, Semaphore, UPSafeCell};
+use crate::task::current_task;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
@@ -44,11 +45,14 @@ pub struct ProcessControlBlockInner {
     /// task resource allocator
     pub task_res_allocator: RecycleAllocator,
     /// mutex list
+    // todo 什么情况会是None?
     pub mutex_list: Vec<Option<Arc<dyn Mutex>>>,
     /// semaphore list
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+    /// 是否启用死锁检测
+    pub deadlock_detect_enabled: bool,
 }
 
 impl ProcessControlBlockInner {
@@ -119,6 +123,7 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    deadlock_detect_enabled: false,
                 })
             },
         });
@@ -245,6 +250,8 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    // todo 是否需要保持和父进程一致?
+                    deadlock_detect_enabled: false,
                 })
             },
         });
@@ -282,4 +289,119 @@ impl ProcessControlBlock {
     pub fn getpid(&self) -> usize {
         self.pid.0
     }
+
+    pub fn try_lock_mutex(&self, mutex_id: usize) -> bool {
+        let inner = self.inner.exclusive_access();
+        if mutex_id >= inner.mutex_list.len() || inner.mutex_list[mutex_id].is_none() {
+            return false;
+        }
+        if inner.deadlock_detect_enabled {
+            let m = inner.mutex_list.len();
+            let n = inner.tasks.len();
+            let mut available = vec![0; m];
+            let mut allocation = vec![vec![0; m]; n];
+            for (id, mutex) in inner.mutex_list.iter().enumerate() {
+                if let Some(ref mutex) = mutex {
+                    match mutex.get_owner() {
+                        // 虽然说最大就是1,还是+=1比较保险
+                        Some(owner) => allocation[owner][id] += 1,
+                        None => available[id] = 1,
+                    }
+                }
+            }
+            let need = vec![vec![0; m]; n];
+            let current_tid = current_task()
+                .unwrap()
+                .inner_exclusive_access()
+                .res
+                .as_ref()
+                .unwrap()
+                .tid;
+            available[mutex_id] -= 1;
+            allocation[current_tid][mutex_id] += 1;
+            if !is_safe_state(&available, &allocation, &need) {
+                return false;
+            }
+        }
+        let mutex = Arc::clone(inner.mutex_list[mutex_id].as_ref().unwrap());
+        drop(inner);
+        mutex.lock();
+        true
+    }
+
+    pub fn try_down_semaphore(&self, sem_id: usize) -> isize {
+        let inner = self.inner.exclusive_access();
+        if sem_id >= inner.semaphore_list.len() || inner.semaphore_list[sem_id].is_none() {
+            return -1;
+        }
+        if inner.deadlock_detect_enabled {
+            let m = inner.semaphore_list.len();
+            let n = inner.tasks.len();
+            let mut available = vec![0; m];
+            let mut allocation = vec![vec![0; m]; n];
+            let mut need = vec![vec![0; m]; n];
+            for (id, sem) in inner.semaphore_list.iter().enumerate() {
+                if let Some(ref sem) = sem {
+                    for owner in sem.get_owners() {
+                        // todo 会有>1的情况吗?
+                        allocation[owner][id] += 1;
+                    }
+                    if sem.get_count() >= 0 {
+                        available[id] += sem.get_count() as usize;
+                    } else {
+                        let wait_tid_list = sem.get_wait_tid_list();
+                        for tid in wait_tid_list {
+                            need[tid][id] += 1;
+                        }
+                    }
+                }
+            }
+            let current_tid = current_task()
+                .unwrap()
+                .inner_exclusive_access()
+                .res
+                .as_ref()
+                .unwrap()
+                .tid;
+            if available[sem_id] < 1 {
+                return -1;
+            }
+            available[sem_id] -= 1;
+            
+            allocation[current_tid][sem_id] += 1;
+            println!("avail {:?}", available);
+            println!("alloc {:?}", allocation);
+            println!("need {:?}", need);
+            if !is_safe_state(&available, &allocation, &need) {
+                return -0xDEAD;
+            }
+        }
+        let sem = Arc::clone(inner.semaphore_list[sem_id].as_ref().unwrap());
+        drop(inner);
+        sem.down();
+        0
+    }
+}
+
+/// 可利用资源向量 Available ：含有 m 个元素的一维数组，每个元素代表可利用的某一类资源的数目， 其初值是该类资源的全部可用数目，其值随该类资源的分配和回收而动态地改变。 Available[j] = k，表示第 j 类资源的可用数量为 k。
+/// 分配矩阵 Allocation：n * m 矩阵，表示每类资源已分配给每个线程的资源数。 Allocation[i,j] = g，则表示线程 i 当前己分得第 j 类资源的数量为 g。
+/// 需求矩阵 Need：n * m 的矩阵，表示每个线程还需要的各类资源数量。 Need[i,j] = d，则表示线程 i 还需要第 j 类资源的数量为 d 。
+fn is_safe_state(available: &[usize], allocation: &[Vec<usize>], need: &[Vec<usize>]) -> bool {
+    fn can_allocate(thread_need: &[usize], work: &[usize]) -> bool {
+        thread_need.iter().zip(work).all(|(a, b)| a <= b)
+    }
+    // 线程数
+    let n = allocation.len();
+    let mut work = available.to_vec();
+    let mut finish = vec![false; n];
+    for _ in 0..n {
+        let found_thread = (0..n).find(|&i| !finish[i] && can_allocate(&need[i], &work));
+        if let Some(i) = found_thread {
+            work.iter_mut().zip(&allocation[i]).for_each(|(w, &alloc)| *w += alloc);
+            finish[i] = true;
+        } else {
+            return false;
+        }
+    }
+    true
 }
